@@ -80,17 +80,14 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 
 // writes intermediate data to Files
 func writeIntermediate(intermediate []KeyValue, mapTaskNum int, nReduce int) []string {
-	fmt.Printf("map task num: %d\n", mapTaskNum)
 	groups := make(map[int][]KeyValue)
-	filesNames := make([]string, 0)
 	for _, item := range intermediate {
-
 		hash := ihash(item.Key) % nReduce
 		groups[hash] = append(groups[hash], item)
 	}
+	filesNames := make([]string, len(groups))
 	for key, val := range groups {
-		reduceTaskNum := key
-		filename := createFileName(mapTaskNum, reduceTaskNum)
+		filename := createFileName(mapTaskNum, key)
 		//
 		tempFileName := fmt.Sprintf("%s-%d.tmp", filename, os.Getuid())
 		finalFileName := fmt.Sprintf("%s.txt", filename)
@@ -109,7 +106,7 @@ func writeIntermediate(intermediate []KeyValue, mapTaskNum int, nReduce int) []s
 		if err := os.Rename(tempFileName, finalFileName); err != nil {
 			log.Fatal(err)
 		}
-		filesNames = append(filesNames, filename)
+		filesNames[key] = filename
 	}
 	return filesNames
 }
