@@ -15,18 +15,23 @@ import "strconv"
 //
 
 const (
-	_ = iota
+	err = iota
 	mapTask
 	reduceTask
+
+	// pseudo-task, tells the worker it no longer needs to stay alive, and the job is done
+	// this is returned in case the worker contacted the master between the time the master
+	// acknowledges that all the tasks are done, but it didn't exit yet
+	// Note: if this is not used, and alternatively the master returns a nil task or an empty task
+	//       then the worker will wait, and the next time the worker calls the master, the master
+	// 		 will be dead, and the worker would know to exit, so this just simply lets the worker dies
+	// 		 early.
+	thanks
 )
 
 type WorkerMessage struct {
-	workerId int
-	State    int // [needsTask, intermediateProgress, or done]
-
-	// info about previously done Task
-	Files  []string
-	TaskId int
+	WorkerId int
+	Files    []string
 }
 
 type MasterReply struct {

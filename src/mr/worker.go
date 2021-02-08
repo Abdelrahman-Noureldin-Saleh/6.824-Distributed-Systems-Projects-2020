@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"sort"
+	"strings"
 	"time"
 )
 import "log"
@@ -17,6 +19,14 @@ type KeyValue struct {
 	Key   string
 	Value string
 }
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // use ihash(key) % NReduce to choose the reduce
@@ -33,35 +43,40 @@ func ihash(key string) int {
 //
 func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 
-	// Your worker implementation here.
-
-	// uncomment to send the GetTask RPC to the master.
-
 	reply := CallMaster(nil)
 
+Loop:
 	for {
 		var files []string
 		task := reply.Task
-		printTask(task)
 		switch task.TaskType {
 		case mapTask:
-			var intermediate []KeyValue
-			file, err := os.Open(task.Input[0])
-			if err != nil {
-				log.Fatalf("cannot open %v", task.Input[0])
-			}
-			content, err := ioutil.ReadAll(file)
-			if err != nil {
-				log.Fatalf("cannot read %v", task.Input[0])
-			}
-			if err := file.Close(); err != nil {
-				log.Fatalf("cannot close %v", task.Input[0])
-			}
+			content := readFile(task.Input[0])
 			kva := mapf(task.Input[0], string(content))
-			intermediate = append(intermediate, kva...)
-			files = writeIntermediate(intermediate, task.TaskId, reply.NReduce)
+			files = writeIntermediate(kva, task.TaskId, reply.NReduce)
+
 		case reduceTask:
-			fmt.Printf("reduce... \n")
+			var intermediate map[string][]string
+			intermediate = make(map[string][]string)
+			for _, name := range task.Input {
+				content := readFile(name)
+				pairs := strings.Split(strings.Trim(string(content), "\n"), "\n")
+				for _, line := range pairs {
+					pair := strings.Split(line, " ")
+					x := KeyValue{Key: pair[0], Value: pair[1]}
+					intermediate[x.Key] = append(intermediate[x.Key], x.Value)
+				}
+			}
+			var final []KeyValue
+			for key, val := range intermediate {
+				final = append(final, KeyValue{Key: key, Value: reducef(key, val)})
+			}
+			name := writeFinal(final, task.TaskId)
+			files = append(files, name)
+
+		case thanks:
+			break Loop
+
 		default:
 			// sleep for one second, then call the master again for a Task
 			// the reason for this is to differentiate between when the job is done
@@ -78,6 +93,45 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	}
 }
 
+func writeFinal(final []KeyValue, taskNum int) string {
+
+	sort.Sort(ByKey(final))
+	filename := createFinalFileName(taskNum)
+	tempFileName := fmt.Sprintf("%s-%d-red", filename, os.Getpid())
+	file, err := os.OpenFile(tempFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, keyValue := range final {
+		if _, err := file.WriteString(fmt.Sprintf("%v %v\n", keyValue.Key, keyValue.Value)); err != nil {
+			log.Fatal(err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		log.Fatal(err)
+	}
+	if err := os.Rename(tempFileName, filename); err != nil {
+		log.Fatal(err)
+	}
+	return filename
+}
+
+// helper function to read a file safely
+func readFile(filename string) []byte {
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("cannot open %v", filename)
+	}
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", filename)
+	}
+	if err := file.Close(); err != nil {
+		log.Fatalf("cannot close %v", filename)
+	}
+	return content
+}
+
 // writes intermediate data to Files
 func writeIntermediate(intermediate []KeyValue, mapTaskNum int, nReduce int) []string {
 	groups := make(map[int][]KeyValue)
@@ -87,10 +141,10 @@ func writeIntermediate(intermediate []KeyValue, mapTaskNum int, nReduce int) []s
 	}
 	filesNames := make([]string, len(groups))
 	for key, val := range groups {
-		filename := createFileName(mapTaskNum, key)
+		filename := createIntermediateFileName(mapTaskNum, key)
 		//
-		tempFileName := fmt.Sprintf("%s-%d.tmp", filename, os.Getuid())
-		finalFileName := fmt.Sprintf("%s.txt", filename)
+		tempFileName := fmt.Sprintf("%s-%d-map", filename, os.Getpid())
+		finalFileName := fmt.Sprintf("%s", filename)
 		f, err := os.OpenFile(tempFileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			log.Fatal(err)
@@ -122,7 +176,7 @@ func CallMaster(files []string) MasterReply {
 	reply := MasterReply{}
 
 	args := WorkerMessage{
-		workerId: os.Getuid(),
+		WorkerId: os.Getpid(),
 		Files:    files,
 	}
 
@@ -130,7 +184,10 @@ func CallMaster(files []string) MasterReply {
 	if !call("Master.GetTask", &args, &reply) {
 		os.Exit(1)
 	}
-	printTask(reply.Task)
+	if reply.Task.TaskType != err {
+		fmt.Printf("worker %d assigned: ", os.Getpid())
+		printTask(reply.Task)
+	}
 	return reply
 }
 
