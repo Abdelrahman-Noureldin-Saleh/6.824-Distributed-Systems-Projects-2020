@@ -14,16 +14,31 @@ import "strconv"
 // and reply for an RPC.
 //
 
-type ExampleArgs struct {
-	X int
+const (
+	noTasksAvailable = iota
+	mapTask
+	reduceTask
+)
+
+const (
+	_ = iota
+	needsTask
+	intermediateProgress
+	done
+)
+
+type WorkerMessage struct {
+	Id    int
+	State int // [needsTask, intermediateProgress, or done]
 }
 
-type ExampleReply struct {
-	Y int
+type MasterReply struct {
+	TaskType int // [mapTask, or reduceTask]
+	TaskNum  int
+	FileName string // file name in case of map task*/
 }
 
 // Add your RPC definitions here.
-
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.

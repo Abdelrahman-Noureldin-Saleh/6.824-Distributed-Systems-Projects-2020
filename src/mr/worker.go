@@ -1,10 +1,12 @@
 package mr
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
-
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,17 +26,27 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 //
 // main/mrworker.go calls this function.
 //
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
+func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string) string) {
 
 	// Your worker implementation here.
 
-	// uncomment to send the Example RPC to the master.
-	// CallExample()
+	// uncomment to send the GetTask RPC to the master.
+	reply := CallMaster()
+
+loop:
+	for {
+		switch reply.TaskType {
+		case mapTask:
+
+		case reduceTask:
+
+		case noTasksAvailable:
+			break loop
+		}
+	}
 
 }
 
@@ -43,22 +55,25 @@ func Worker(mapf func(string, string) []KeyValue,
 //
 // the RPC argument and reply types are defined in rpc.go.
 //
-func CallExample() {
+func CallMaster() MasterReply {
 
 	// declare an argument structure.
-	args := ExampleArgs{}
+	reply := MasterReply{}
 
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
+	args := WorkerMessage{
+		Id:    os.Getuid(),
+		State: needsTask,
+	}
 
 	// send the RPC request, wait for the reply.
-	call("Master.Example", &args, &reply)
+	if !call("Master.GetTask", &args, &reply) {
+		os.Exit(1)
+	}
 
 	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+	fmt.Printf("reply %v\n", reply)
+
+	return reply
 }
 
 //
