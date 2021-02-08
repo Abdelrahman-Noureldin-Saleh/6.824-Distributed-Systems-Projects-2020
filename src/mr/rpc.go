@@ -15,30 +15,24 @@ import "strconv"
 //
 
 const (
-	noTasksAvailable = iota
+	_ = iota
 	mapTask
 	reduceTask
 )
 
-const (
-	_ = iota
-	needsTask
-	intermediateProgress
-	done
-)
-
 type WorkerMessage struct {
-	Id    int
-	State int // [needsTask, intermediateProgress, or done]
-	files []string
+	workerId int
+	State    int // [needsTask, intermediateProgress, or done]
+
+	// info about previously done Task
+	Files  []string
+	TaskId int
 }
 
 type MasterReply struct {
-	TaskType int // [mapTask, or reduceTask]
-	TaskNum  int
-	FileName string // file name in case of map task
-	nReduce  int
-	nMap     int
+	Task    Task
+	NReduce int
+	NMap    int
 }
 
 // Add your RPC definitions here.

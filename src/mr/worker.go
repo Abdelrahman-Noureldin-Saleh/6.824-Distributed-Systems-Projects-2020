@@ -20,7 +20,7 @@ type KeyValue struct {
 
 //
 // use ihash(key) % NReduce to choose the reduce
-// task number for each KeyValue emitted by Map.
+// Task number for each KeyValue emitted by Map.
 //
 func ihash(key string) int {
 	h := fnv.New32a()
@@ -36,50 +36,55 @@ func Worker(mapf func(string, string) []KeyValue, reducef func(string, []string)
 	// Your worker implementation here.
 
 	// uncomment to send the GetTask RPC to the master.
+
 	reply := CallMaster(nil)
 
 	for {
 		var files []string
-		switch reply.TaskType {
+		task := reply.Task
+		printTask(task)
+		switch task.TaskType {
 		case mapTask:
 			var intermediate []KeyValue
-			file, err := os.Open(reply.FileName)
+			file, err := os.Open(task.Input[0])
 			if err != nil {
-				log.Fatalf("cannot open %v", reply.FileName)
+				log.Fatalf("cannot open %v", task.Input[0])
 			}
 			content, err := ioutil.ReadAll(file)
 			if err != nil {
-				log.Fatalf("cannot read %v", reply.FileName)
+				log.Fatalf("cannot read %v", task.Input[0])
 			}
 			if err := file.Close(); err != nil {
-				log.Fatalf("cannot close %v", reply.FileName)
+				log.Fatalf("cannot close %v", task.Input[0])
 			}
-			kva := mapf(reply.FileName, string(content))
+			kva := mapf(task.Input[0], string(content))
 			intermediate = append(intermediate, kva...)
-			files = writeIntermediate(intermediate, reply.TaskNum, reply.nMap, reply.nReduce)
+			files = writeIntermediate(intermediate, task.TaskId, reply.NReduce)
 		case reduceTask:
-
-		case noTasksAvailable:
-			// sleep for one second, then call the master again for a task
+			fmt.Printf("reduce... \n")
+		default:
+			// sleep for one second, then call the master again for a Task
 			// the reason for this is to differentiate between when the job is done
-			// and when the job is not done, but there are no idle task
+			// and when the job is not done, but there are no idle Task
 			// we would like to keep this worker alive if there are in-progress tasks
-			// in case one of the workers that are working on a task have died
-			// in that case, after a while, this worker will call the master asking for a task
-			// and the master would give it the previously in-progress (now idle) failed task.
+			// in case one of the workers that are working on a Task have died
+			// in that case, after a while, this worker will call the master asking for a Task
+			// and the master would give it the previously in-progress (now idle) failed Task.
 			// if the master didn't reply at all, which indicates either the job is done or
 			// the master had died, then and only then this worker will exit.
 			time.Sleep(time.Second)
 		}
-		CallMaster(files)
+		reply = CallMaster(files)
 	}
 }
 
-// writes intermediate data to files
-func writeIntermediate(intermediate []KeyValue, mapTaskNum int, nMap, nReduce int) []string {
+// writes intermediate data to Files
+func writeIntermediate(intermediate []KeyValue, mapTaskNum int, nReduce int) []string {
+	fmt.Printf("map task num: %d\n", mapTaskNum)
 	groups := make(map[int][]KeyValue)
-	filesNames := make([]string, nMap)
+	filesNames := make([]string, 0)
 	for _, item := range intermediate {
+
 		hash := ihash(item.Key) % nReduce
 		groups[hash] = append(groups[hash], item)
 	}
@@ -120,18 +125,15 @@ func CallMaster(files []string) MasterReply {
 	reply := MasterReply{}
 
 	args := WorkerMessage{
-		Id:    os.Getuid(),
-		State: needsTask,
-		files: files,
+		workerId: os.Getuid(),
+		Files:    files,
 	}
 
 	// send the RPC request, wait for the reply.
 	if !call("Master.GetTask", &args, &reply) {
 		os.Exit(1)
 	}
-
-	fmt.Printf("reply %v\n", reply)
-
+	printTask(reply.Task)
 	return reply
 }
 
