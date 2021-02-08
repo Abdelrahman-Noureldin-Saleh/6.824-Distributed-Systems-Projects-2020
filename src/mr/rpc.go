@@ -30,12 +30,15 @@ const (
 type WorkerMessage struct {
 	Id    int
 	State int // [needsTask, intermediateProgress, or done]
+	files []string
 }
 
 type MasterReply struct {
 	TaskType int // [mapTask, or reduceTask]
 	TaskNum  int
-	FileName string // file name in case of map task*/
+	FileName string // file name in case of map task
+	nReduce  int
+	nMap     int
 }
 
 // Add your RPC definitions here.

@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"fmt"
 	"log"
 )
 import "net"
@@ -12,6 +13,8 @@ import "net/http"
 type Master struct {
 	mapTask map[int]map[int]MapTask
 	redTask map[int]map[int]RedTask
+	nMap    int
+	nReduce int
 }
 
 const (
@@ -44,10 +47,12 @@ func (master *Master) GetTask(args *WorkerMessage, reply *MasterReply) error {
 			// get first available idle map task
 			num, task := getMapTask(master.mapTask[idle])
 
-			//// file the reply message
+			//// fill the reply message
 			reply.TaskType = mapTask
 			reply.TaskNum = num
 			reply.FileName = task.fileName
+			reply.nMap = master.nMap
+			reply.nReduce = master.nReduce
 
 			// move task from idle to inProgress
 			master.mapTask[inProgress][num] = task
@@ -60,6 +65,8 @@ func (master *Master) GetTask(args *WorkerMessage, reply *MasterReply) error {
 			//// fill the reply message
 			reply.TaskType = reduceTask
 			reply.TaskNum = num
+			reply.nMap = master.nMap
+			reply.nReduce = master.nReduce
 
 			// move task from idle to inProgress
 			master.redTask[inProgress][num] = task
@@ -148,4 +155,8 @@ func MakeMaster(files []string, nReduce int) *Master {
 
 	master.server()
 	return &master
+}
+
+func createFileName(mapTaskNum int, ReduceTaskNum int) string {
+	return fmt.Sprintf("mr-%d-%d", mapTaskNum, ReduceTaskNum)
 }
