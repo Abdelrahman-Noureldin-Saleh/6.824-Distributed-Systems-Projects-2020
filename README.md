@@ -16,9 +16,7 @@
 -->
 
 <!-- PROJECT LOGO -->
-<br />
 <p align="center">
-
 <h3 align="center">6.824 Distributed Systems</h3>
 
   <p align="center">
