@@ -19,13 +19,10 @@ type Master struct {
 	tasks       PriorityQueue
 	assignments map[int]*Task
 
-	nMap                  int // number of map tasks
-	nReduce               int // number of reduce tasks
-	iter                  int
+	nMap                  int        // number of map tasks
+	nReduce               int        // number of reduce tasks
 	intermediateFileNames [][]string // intermediateFileNames, rows are maps, columns are reduce
 	outputFileNames       []string   // outputFileNames, each row is for a different reduce function
-	iter2                 int
-
 	// example: intermediateFileNames[mapIdx][reduceIdx] == createIntermediateFileName(mapIdx, reduceTaskNum)
 	// should be 'true' if the map function with mapIdx finished execution
 }
@@ -130,8 +127,7 @@ type Task struct {
 //
 func (master *Master) GetTask(args *WorkerMessage, reply *MasterReply) error {
 	master.mutex.Lock()
-	fmt.Printf("#%d getTask call with packet => %v\n", master.iter2, *args)
-	master.iter2++
+	//fmt.Printf("# getTask call with packet => %v\n", *args)
 
 	// if the message contains output file(s)
 	// which means this worker just finished executing a Task, and produced some outputs
@@ -155,8 +151,10 @@ func (master *Master) GetTask(args *WorkerMessage, reply *MasterReply) error {
 			task.WorkerId = args.WorkerId
 			master.assignments[args.WorkerId] = task
 			if task.TaskType == reduceTask {
-				for _, row := range master.intermediateFileNames {
-					task.Input = append(task.Input, row[task.TaskId])
+				if len(task.Input) == 0 {
+					for _, row := range master.intermediateFileNames {
+						task.Input = append(task.Input, row[task.TaskId])
+					}
 				}
 			}
 			reply.Task = *task
@@ -205,14 +203,6 @@ func (master *Master) server() {
 // if the entire job has finished.
 //
 func (master *Master) Done() bool {
-
-	/*fmt.Printf("#%2d peek --> ", master.iter)
-	printTask(*master.tasks.Peek().(*Task))
-	master.iter++
-
-	for _, task := range master.tasks {
-		printTask(*task)
-	}*/
 	return master.tasks.Peek().(*Task).TaskStatus == completed
 }
 
@@ -247,12 +237,6 @@ func MakeMaster(files []string, nReduce int) *Master {
 			WorkerId: -1, Input: []string{},
 		})
 	}
-
-	fmt.Printf("- initial list of tasks: \n")
-	for _, task := range master.tasks {
-		printTask(*task)
-	}
-	fmt.Printf("- end of initial list of tasks -\n")
 
 	// listen to workers
 	master.server()

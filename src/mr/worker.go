@@ -59,6 +59,9 @@ Loop:
 			var intermediate map[string][]string
 			intermediate = make(map[string][]string)
 			for _, name := range task.Input {
+				if len(name) == 0 {
+					continue
+				}
 				content := readFile(name)
 				pairs := strings.Split(strings.Trim(string(content), "\n"), "\n")
 				for _, line := range pairs {
@@ -134,12 +137,13 @@ func readFile(filename string) []byte {
 
 // writes intermediate data to Files
 func writeIntermediate(intermediate []KeyValue, mapTaskNum int, nReduce int) []string {
+	//fmt.Printf("task %d writing %d pairs: %v\n", mapTaskNum, len(intermediate), intermediate[0:int(math.Min(float64(len(intermediate)), 10))])
 	groups := make(map[int][]KeyValue)
 	for _, item := range intermediate {
 		hash := ihash(item.Key) % nReduce
 		groups[hash] = append(groups[hash], item)
 	}
-	filesNames := make([]string, len(groups))
+	filesNames := make([]string, nReduce)
 	for key, val := range groups {
 		filename := createIntermediateFileName(mapTaskNum, key)
 		//
@@ -183,10 +187,6 @@ func CallMaster(files []string) MasterReply {
 	// send the RPC request, wait for the reply.
 	if !call("Master.GetTask", &args, &reply) {
 		os.Exit(1)
-	}
-	if reply.Task.TaskType != err {
-		fmt.Printf("worker %d assigned: ", os.Getpid())
-		printTask(reply.Task)
 	}
 	return reply
 }
