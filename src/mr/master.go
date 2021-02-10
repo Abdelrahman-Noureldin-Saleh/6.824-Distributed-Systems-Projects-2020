@@ -13,6 +13,7 @@ import "net/rpc"
 import "net/http"
 
 //
+
 type Master struct {
 	mutex sync.Mutex
 
@@ -33,6 +34,9 @@ const (
 	inProgress
 	completed
 )
+
+// maximum number of workers that can be assigned a task simultaneously
+const replicas int = 3
 
 // this priority queue works as the tasks scheduler.
 // modifying Less(i, j int) function modifies the order of tasks execution
@@ -58,6 +62,10 @@ func (pq PriorityQueue) Less(i, j int) bool {
 	// otherwise the status of the Task takes order (idle -> in-progress -> completed)
 	if pq[i].TaskStatus != pq[j].TaskStatus {
 		return pq[i].TaskStatus < pq[j].TaskStatus
+	}
+
+	if len(pq[i].WorkersIDs) != len(pq[j].WorkersIDs) {
+		return len(pq[i].WorkersIDs) < len(pq[j].WorkersIDs)
 	}
 
 	// otherwise the number of Task takes the order (mapTask 1 should be executed before mapTask 2)
@@ -89,7 +97,7 @@ func (pq *PriorityQueue) Peek() interface{} {
 
 // update modifies the priority and value of an Item in the queue.
 func (pq *PriorityQueue) update(item *Task, updated *Task) {
-	item.WorkerId = updated.WorkerId
+	item.WorkersIDs = updated.WorkersIDs
 	item.TaskStatus = updated.TaskStatus
 	item.TaskType = updated.TaskType
 	item.TaskId = updated.TaskId
@@ -98,12 +106,16 @@ func (pq *PriorityQueue) update(item *Task, updated *Task) {
 	heap.Fix(pq, item.Index)
 }
 
+func (pq *PriorityQueue) fix(item *Task) {
+	heap.Fix(pq, item.Index)
+}
+
 type Task struct {
 	// Index of this Task, used for PriorityQueue
 	Index int
 
-	// the uid of the worker working on this Task, -1 if this Task is idle
-	WorkerId int
+	// a "set" of IDs of the worker(s) working on this Task
+	WorkersIDs map[int]struct{}
 
 	// the status of the Task, one of [idle, in-progress, completed]
 	TaskStatus int
@@ -126,61 +138,59 @@ type Task struct {
 // the RPC argument and reply types are defined in rpc.go.
 //
 func (master *Master) GetTask(args *WorkerMessage, reply *MasterReply) error {
-	master.mutex.Lock()
 	//fmt.Printf("# getTask call with packet => %v\n", *args)
 
-	// if the message contains output file(s)
-	// which means this worker just finished executing a Task, and produced some outputs
+	// if the message contains output file(s), they file names/paths should be saved
 	if args.Files != nil {
-		task := master.assignments[args.WorkerId]
-		switch task.TaskType {
-		case mapTask:
-			master.intermediateFileNames[task.TaskId] = args.Files
-		case reduceTask:
-			master.outputFileNames[task.TaskId] = args.Files[0]
-		}
-		task.TaskStatus = completed
-		master.tasks.update(task, task)
+		master.mutex.Lock()
+		master.saveResult(args)
+		master.mutex.Unlock()
 	}
 
 	// assign task to worker
 	if task, ok := master.tasks.Peek().(*Task); ok {
 		switch task.TaskStatus {
-		case idle:
-			task.TaskStatus = inProgress
-			task.WorkerId = args.WorkerId
-			master.assignments[args.WorkerId] = task
-			if task.TaskType == reduceTask {
-				if len(task.Input) == 0 {
-					for _, row := range master.intermediateFileNames {
-						task.Input = append(task.Input, row[task.TaskId])
-					}
-				}
-			}
-			reply.Task = *task
-			reply.NReduce = master.nReduce
-			reply.NMap = master.nMap
-			master.tasks.update(task, task)
-			time.AfterFunc(time.Second*10, func() {
-				master.mutex.Lock()
-				if task.TaskStatus != completed {
-					task.TaskStatus = idle
-					master.tasks.update(task, task)
-				}
-				master.mutex.Unlock()
-			})
-
-		// empty task (worker will wait 1 second)
-
-		case inProgress:
-			reply.Task = Task{}
 
 		case completed:
 			reply.Task = Task{TaskType: thanks}
+
+		default:
+			if len(task.WorkersIDs) < replicas {
+				master.mutex.Lock()
+				master.assignTask(task, args, reply)
+				master.mutex.Unlock()
+			}
 		}
 	}
-	master.mutex.Unlock()
 	return nil
+}
+
+func (master *Master) assignTask(task *Task, args *WorkerMessage, reply *MasterReply) {
+	task.TaskStatus = inProgress
+	task.WorkersIDs[args.WorkerId] = struct{}{}
+	master.assignments[args.WorkerId] = task
+	if task.TaskType == reduceTask {
+		if len(task.Input) == 0 {
+			for _, row := range master.intermediateFileNames {
+				task.Input = append(task.Input, row[task.TaskId])
+			}
+		}
+	}
+	reply.Task = *task
+	reply.NReduce = master.nReduce
+	reply.NMap = master.nMap
+	master.tasks.fix(task)
+	time.AfterFunc(time.Second*10, func() {
+		master.mutex.Lock()
+		if task.TaskStatus != completed {
+			delete(task.WorkersIDs, args.WorkerId)
+			if len(task.WorkersIDs) == 0 {
+				task.TaskStatus = idle
+			}
+			master.tasks.fix(task)
+		}
+		master.mutex.Unlock()
+	})
 }
 
 // start a thread that listens for RPCs from worker.go
@@ -206,6 +216,21 @@ func (master *Master) Done() bool {
 	return master.tasks.Peek().(*Task).TaskStatus == completed
 }
 
+func (master *Master) saveResult(args *WorkerMessage) {
+	task := master.assignments[args.WorkerId]
+	delete(task.WorkersIDs, args.WorkerId)
+	if task.TaskStatus != completed {
+		switch task.TaskType {
+		case mapTask:
+			master.intermediateFileNames[task.TaskId] = args.Files
+		case reduceTask:
+			master.outputFileNames[task.TaskId] = args.Files[0]
+		}
+		task.TaskStatus = completed
+		master.tasks.fix(task)
+	}
+}
+
 //
 // create a Master.
 // main/mrmaster.go calls this function.
@@ -226,7 +251,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	for idx, file := range files {
 		heap.Push(&master.tasks, &Task{
 			TaskStatus: idle, TaskType: mapTask, TaskId: idx,
-			WorkerId: -1, Input: []string{file},
+			WorkersIDs: map[int]struct{}{}, Input: []string{file},
 		})
 	}
 
@@ -234,9 +259,20 @@ func MakeMaster(files []string, nReduce int) *Master {
 	for idx := 0; idx < nReduce; idx++ {
 		heap.Push(&master.tasks, &Task{
 			TaskStatus: idle, TaskType: reduceTask, TaskId: idx,
-			WorkerId: -1, Input: []string{},
+			WorkersIDs: make(map[int]struct{}), Input: []string{},
 		})
 	}
+
+	/*var tasks []*Task
+	for len(master.tasks) != 0 {
+		task := heap.Pop(&master.tasks).(*Task)
+		printTask(*task)
+		tasks = append(tasks, task)
+	}
+
+	for _, task := range tasks {
+		heap.Push(&master.tasks, task)
+	}*/
 
 	// listen to workers
 	master.server()
@@ -254,5 +290,5 @@ func createFinalFileName(reduceTaskNum int) string {
 func printTask(task Task) {
 	status := map[int]string{completed: "Completed", idle: "idle", inProgress: "inProgress"}
 	taskType := map[int]string{mapTask: "mapTask", reduceTask: "redTask", thanks: "thanks"}
-	fmt.Printf("{index:%d, workerId:%d, taskType:%s, taskStatus:%s, TaskId:%d, iuput:%v}\n", task.Index, task.WorkerId, taskType[task.TaskType], status[task.TaskStatus], task.TaskId, task.Input)
+	fmt.Printf("{index:%d, workerId:%d, taskType:%s, taskStatus:%s, TaskId:%d, iuput:%v}\n", task.Index, task.WorkersIDs, taskType[task.TaskType], status[task.TaskStatus], task.TaskId, task.Input)
 }

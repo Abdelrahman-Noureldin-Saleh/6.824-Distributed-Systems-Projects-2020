@@ -188,6 +188,9 @@ func CallMaster(files []string) MasterReply {
 	if !call("Master.GetTask", &args, &reply) {
 		os.Exit(1)
 	}
+
+	//fmt.Printf("worker %d assigned:", args.WorkerId)
+	//printTask(reply.Task)
 	return reply
 }
 
